@@ -1,0 +1,9 @@
+.env
+*.pyc
+__pycache__/
+session.json
+logs/
+data/posts/*
+data/posted/*
+!data/posts/.gitkeep
+!data/posted/.gitkeep
