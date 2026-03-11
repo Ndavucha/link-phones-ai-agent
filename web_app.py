@@ -1,4 +1,4 @@
-from flask import Flask, render_template_string, request, jsonify, redirect, url_for, session
+from flask import Flask, render_template_string, request, jsonify
 import threading
 import logging
 import os
@@ -11,33 +11,61 @@ from src.multi_platform import MultiPlatformPoster
 
 load_dotenv()
 app = Flask(__name__)
-app.secret_key = os.urandom(24)  # For session management
+app.secret_key = os.urandom(24)
 
 logging.basicConfig(level=logging.INFO)
 
-# File-based storage for recent posts (survives restarts)
+# File-based storage for recent posts
 POSTS_FILE = 'recent_posts.json'
 
 def load_recent_posts():
-    """Load recent posts from file"""
+    """Load recent posts from file with error handling"""
     try:
         if os.path.exists(POSTS_FILE):
-            with open(POSTS_FILE, 'r') as f:
-                return json.load(f)
+            with open(POSTS_FILE, 'r', encoding='utf-8') as f:
+                content = f.read().strip()
+                if content:
+                    posts = json.loads(content)
+                    # Ensure it's a list
+                    if isinstance(posts, list):
+                        # Filter out None values
+                        return [p for p in posts if p is not None]
+                    else:
+                        return []
+        return []
+    except json.JSONDecodeError as e:
+        print(f"❌ JSON decode error loading posts: {e}")
+        # Backup the corrupted file
+        if os.path.exists(POSTS_FILE):
+            os.rename(POSTS_FILE, POSTS_FILE + '.backup')
+        return []
     except Exception as e:
-        print(f"Error loading posts: {e}")
-    return []
+        print(f"❌ Error loading posts: {e}")
+        return []
 
 def save_recent_posts(posts):
-    """Save recent posts to file"""
+    """Save recent posts to file with error handling"""
     try:
+        # Ensure posts is a list
+        if not isinstance(posts, list):
+            posts = []
+        
+        # Remove None values
+        posts = [p for p in posts if p is not None]
+        
         # Keep only last 20 posts
-        with open(POSTS_FILE, 'w') as f:
-            json.dump(posts[-20:], f, indent=2)
+        posts = posts[-20:]
+        
+        # Write to file
+        with open(POSTS_FILE, 'w', encoding='utf-8') as f:
+            json.dump(posts, f, indent=2, ensure_ascii=False)
+        print(f"✅ Saved {len(posts)} posts to {POSTS_FILE}")
+        return True
     except Exception as e:
-        print(f"Error saving posts: {e}")
+        print(f"❌ Error saving posts: {e}")
+        return False
 
-# HTML Template for the dashboard
+# HTML Template
 HTML_TEMPLATE = '''
 <!DOCTYPE html>
 <html>
@@ -303,11 +331,12 @@ HTML_TEMPLATE = '''
         
         .platform-tag {
             background: #e9ecef;
-            padding: 2px 8px;
+            padding: 4px 8px;
             border-radius: 12px;
-            margin: 0 2px;
+            margin: 0 4px;
             display: inline-block;
-            font-size: 12px;
+            font-size: 11px;
+            font-weight: 500;
         }
         
         @keyframes spin {
@@ -461,41 +490,6 @@ HTML_TEMPLATE = '''
             </div>
         </div>
         
-        <!-- API Documentation Card -->
-        <div class="card" style="grid-column: 1/-1;">
-            <h2><i>📚</i> API Endpoints for Testing</h2>
-            
-            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 20px;">
-                <div>
-                    <h3>POST /api/test</h3>
-                    <p style="color: #666; font-size: 14px;">Run a test post</p>
-                    <pre style="background: #f8f9fa; padding: 10px; border-radius: 5px; font-size: 12px;">{
-  "platforms": ["facebook"],
-  "caption": "optional"
-}</pre>
-                </div>
-                
-                <div>
-                    <h3>GET /api/recent-posts</h3>
-                    <p style="color: #666; font-size: 14px;">Get recent test posts</p>
-                </div>
-                
-                <div>
-                    <h3>GET /health</h3>
-                    <p style="color: #666; font-size: 14px;">Health check</p>
-                    <pre style="background: #f8f9fa; padding: 10px; border-radius: 5px;">{
-  "status": "healthy"
-}</pre>
-                </div>
-                
-                <div>
-                    <h3>GET /post-now</h3>
-                    <p style="color: #666; font-size: 14px;">Quick test post</p>
-                    <p><a href="/post-now" target="_blank">Try it now →</a></p>
-                </div>
-            </div>
-        </div>
-        
         <div class="footer">
             <p>Built with ❤️ for Link Phones | <a href="https://github.com/Ndavucha/link-phones-ai-agent" target="_blank">GitHub</a></p>
         </div>
@@ -517,12 +511,17 @@ HTML_TEMPLATE = '''
         
         async function loadRecentPosts() {
             try {
-                const response = await fetch('/api/recent-posts');
-                const posts = await response.json();
-                
                 const container = document.getElementById('recent-posts-container');
                 
-                if (posts.length === 0) {
+                const response = await fetch('/api/recent-posts');
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+                
+                const posts = await response.json();
+                
+                if (!posts || posts.length === 0) {
                     container.innerHTML = '<p style="color: #666; text-align: center; padding: 20px;">No test posts yet. Run a test above!</p>';
                     return;
                 }
@@ -530,7 +529,9 @@ HTML_TEMPLATE = '''
                 let html = '';
                 // Show most recent first
                 posts.slice().reverse().forEach(post => {
-                    const platformsHtml = post.platforms.map(p => 
+                    if (!post) return;
+                    
+                    const platformsHtml = (post.platforms || []).map(p => 
                         `<span class="platform-tag">${p}</span>`
                     ).join(' ');
                     
@@ -538,14 +539,14 @@ HTML_TEMPLATE = '''
                         <div class="result-box success" style="margin-top: 15px;">
                             <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
                                 <div>
-                                    <strong>${post.date || post.time}</strong>
+                                    <strong>${post.date || post.time || 'Just now'}</strong>
                                 </div>
                                 <div>
                                     ${platformsHtml}
                                     <span style="color: #28a745; margin-left: 10px; font-weight: 600;">✓ Posted</span>
                                 </div>
                             </div>
-                            <pre style="background: #f8f9fa; padding: 10px; border-radius: 5px; margin: 0; font-size: 12px;">${post.caption}</pre>
+                            <pre style="background: #f8f9fa; padding: 10px; border-radius: 5px; margin: 0; font-size: 12px; white-space: pre-wrap;">${post.caption || 'No caption'}</pre>
                         </div>
                     `;
                 });
@@ -553,8 +554,9 @@ HTML_TEMPLATE = '''
                 container.innerHTML = html;
                 
             } catch (e) {
+                console.error('Error loading posts:', e);
                 document.getElementById('recent-posts-container').innerHTML = 
-                    '<p style="color: #dc3545; text-align: center;">Error loading posts</p>';
+                    `<p style="color: #dc3545; text-align: center;">Error loading posts: ${e.message}</p>`;
             }
         }
         
@@ -564,7 +566,6 @@ HTML_TEMPLATE = '''
             resultBox.className = 'result-box';
             resultBox.innerHTML = '<div class="loading" style="margin-right: 10px;"></div> Testing...';
             
-            // Get selected platforms
             const platforms = [];
             if (document.getElementById('platform-fb').checked) platforms.push('facebook');
             if (document.getElementById('platform-ig').checked) platforms.push('instagram');
@@ -582,8 +583,7 @@ HTML_TEMPLATE = '''
                     method: 'POST',
                     headers: {'Content-Type': 'application/json'},
                     body: JSON.stringify({
-                        platforms: platforms,
-                        test_phone: document.getElementById('test-phone').value
+                        platforms: platforms
                     })
                 });
                 
@@ -694,7 +694,7 @@ HTML_TEMPLATE = '''
         }
         
         function connectPlatform(platform) {
-            alert(`Redirecting to ${platform} OAuth... (This would connect your account)`);
+            alert(`Connect to ${platform} would happen here. In production, this would redirect to OAuth.`);
         }
         
         // Load recent posts when page loads
@@ -720,8 +720,6 @@ def test_post():
         data = request.json
         platforms = data.get('platforms', ['facebook'])
         custom_caption = data.get('custom_caption')
-        custom_image = data.get('custom_image')
-        test_phone = data.get('test_phone', 'iphone13')
         
         # Initialize manager
         manager = PostManager()
@@ -750,8 +748,7 @@ def test_post():
         else:
             # Use AI-generated content
             result = manager.create_and_post_multi(platforms=platforms)
-            # Get the caption from somewhere - you might need to capture it
-            caption = "AI-generated content for " + ', '.join(platforms)
+            caption = f"AI-generated post for {', '.join(platforms)}"
         
         # Load existing posts
         recent_posts = load_recent_posts()
@@ -761,7 +758,7 @@ def test_post():
             'time': datetime.now().strftime('%H:%M:%S'),
             'date': datetime.now().strftime('%Y-%m-%d %H:%M'),
             'platforms': platforms,
-            'caption': caption[:150] + '...' if len(caption) > 150 else caption,
+            'caption': caption[:200] + ('...' if len(caption) > 200 else ''),
             'success': True
         })
         
@@ -775,6 +772,7 @@ def test_post():
         })
         
     except Exception as e:
+        print(f"❌ Error in test_post: {e}")
         return jsonify({
             'success': False,
             'error': str(e)
@@ -783,23 +781,42 @@ def test_post():
 @app.route('/api/recent-posts')
 def get_recent_posts():
     """Get recent test posts"""
-    return jsonify(load_recent_posts())
+    try:
+        posts = load_recent_posts()
+        return jsonify(posts)
+    except Exception as e:
+        print(f"❌ Error in recent-posts: {e}")
+        return jsonify([])
 
 @app.route('/api/settings', methods=['POST'])
 def save_settings():
-    """Save user settings (temporarily in session)"""
+    """Save user settings"""
     try:
         data = request.json
-        
-        # In production, you'd save these to a database
-        # For testing, we'll just acknowledge
-        if data.get('openai_key'):
-            os.environ['OPENAI_API_KEY'] = data['openai_key']
-        
+        # For demo, just acknowledge
         return jsonify({'success': True})
-        
     except Exception as e:
         return jsonify({'success': False, 'error': str(e)}), 500
+
+@app.route('/api/debug-posts')
+def debug_posts():
+    """Debug endpoint to check posts file"""
+    try:
+        posts = load_recent_posts()
+        file_exists = os.path.exists(POSTS_FILE)
+        file_content = ""
+        if file_exists:
+            with open(POSTS_FILE, 'r') as f:
+                file_content = f.read()
+        
+        return jsonify({
+            'file_exists': file_exists,
+            'post_count': len(posts),
+            'posts': posts,
+            'file_content_preview': file_content[:500] if file_content else 'Empty'
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)})
 
 @app.route('/post-now')
 def post_now():
@@ -819,18 +836,21 @@ def health():
 # Background scheduler
 def run_scheduler():
     """Run scheduled posts in background"""
-    manager = PostManager()
-    manager.ai_agent.load_inventory()
-    
-    import schedule
-    import time
-    
-    schedule.every().day.at("09:00").do(manager.create_and_post_multi)
-    schedule.every().day.at("19:00").do(manager.create_and_post_multi)
-    
-    while True:
-        schedule.run_pending()
-        time.sleep(60)
+    try:
+        manager = PostManager()
+        manager.ai_agent.load_inventory()
+        
+        import schedule
+        import time
+        
+        schedule.every().day.at("09:00").do(manager.create_and_post_multi)
+        schedule.every().day.at("19:00").do(manager.create_and_post_multi)
+        
+        while True:
+            schedule.run_pending()
+            time.sleep(60)
+    except Exception as e:
+        print(f"❌ Scheduler error: {e}")
 
 # Start scheduler in background thread
 if __name__ != '__main__':
