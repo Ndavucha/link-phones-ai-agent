@@ -15,6 +15,28 @@ app.secret_key = os.urandom(24)  # For session management
 
 logging.basicConfig(level=logging.INFO)
 
+# File-based storage for recent posts (survives restarts)
+POSTS_FILE = 'recent_posts.json'
+
+def load_recent_posts():
+    """Load recent posts from file"""
+    try:
+        if os.path.exists(POSTS_FILE):
+            with open(POSTS_FILE, 'r') as f:
+                return json.load(f)
+    except Exception as e:
+        print(f"Error loading posts: {e}")
+    return []
+
+def save_recent_posts(posts):
+    """Save recent posts to file"""
+    try:
+        # Keep only last 20 posts
+        with open(POSTS_FILE, 'w') as f:
+            json.dump(posts[-20:], f, indent=2)
+    except Exception as e:
+        print(f"Error saving posts: {e}")
+
 # HTML Template for the dashboard
 HTML_TEMPLATE = '''
 <!DOCTYPE html>
@@ -279,6 +301,15 @@ HTML_TEMPLATE = '''
             animation: spin 1s linear infinite;
         }
         
+        .platform-tag {
+            background: #e9ecef;
+            padding: 2px 8px;
+            border-radius: 12px;
+            margin: 0 2px;
+            display: inline-block;
+            font-size: 12px;
+        }
+        
         @keyframes spin {
             0% { transform: rotate(0deg); }
             100% { transform: rotate(360deg); }
@@ -425,20 +456,8 @@ HTML_TEMPLATE = '''
         <div class="card" style="grid-column: 1/-1;">
             <h2><i>📊</i> Recent Test Posts</h2>
             
-            <div id="recent-posts">
-                {% if recent_posts %}
-                    {% for post in recent_posts %}
-                    <div class="result-box success" style="margin-top: 10px;">
-                        <div style="display: flex; justify-content: space-between;">
-                            <span><strong>{{ post.time }}</strong> - {{ post.platforms|join(', ') }}</span>
-                            <span style="color: #28a745;">✓ Success</span>
-                        </div>
-                        <pre style="margin-top: 10px;">{{ post.caption[:100] }}...</pre>
-                    </div>
-                    {% endfor %}
-                {% else %}
-                    <p style="color: #666; text-align: center;">No test posts yet. Run a test above!</p>
-                {% endif %}
+            <div id="recent-posts-container">
+                <div class="loading" style="margin: 20px auto;"></div>
             </div>
         </div>
         
@@ -454,6 +473,11 @@ HTML_TEMPLATE = '''
   "platforms": ["facebook"],
   "caption": "optional"
 }</pre>
+                </div>
+                
+                <div>
+                    <h3>GET /api/recent-posts</h3>
+                    <p style="color: #666; font-size: 14px;">Get recent test posts</p>
                 </div>
                 
                 <div>
@@ -473,13 +497,11 @@ HTML_TEMPLATE = '''
         </div>
         
         <div class="footer">
-            <p>Built with ❤️ for Link Phones | <a href="https://github.com/yourusername/link-phones-ai-agent" target="_blank">GitHub</a></p>
+            <p>Built with ❤️ for Link Phones | <a href="https://github.com/Ndavucha/link-phones-ai-agent" target="_blank">GitHub</a></p>
         </div>
     </div>
     
     <script>
-        let recentPosts = [];
-        
         function switchTab(tab) {
             document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
             document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
@@ -490,6 +512,49 @@ HTML_TEMPLATE = '''
             } else {
                 document.querySelectorAll('.tab')[1].classList.add('active');
                 document.getElementById('custom-tab').classList.add('active');
+            }
+        }
+        
+        async function loadRecentPosts() {
+            try {
+                const response = await fetch('/api/recent-posts');
+                const posts = await response.json();
+                
+                const container = document.getElementById('recent-posts-container');
+                
+                if (posts.length === 0) {
+                    container.innerHTML = '<p style="color: #666; text-align: center; padding: 20px;">No test posts yet. Run a test above!</p>';
+                    return;
+                }
+                
+                let html = '';
+                // Show most recent first
+                posts.slice().reverse().forEach(post => {
+                    const platformsHtml = post.platforms.map(p => 
+                        `<span class="platform-tag">${p}</span>`
+                    ).join(' ');
+                    
+                    html += `
+                        <div class="result-box success" style="margin-top: 15px;">
+                            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+                                <div>
+                                    <strong>${post.date || post.time}</strong>
+                                </div>
+                                <div>
+                                    ${platformsHtml}
+                                    <span style="color: #28a745; margin-left: 10px; font-weight: 600;">✓ Posted</span>
+                                </div>
+                            </div>
+                            <pre style="background: #f8f9fa; padding: 10px; border-radius: 5px; margin: 0; font-size: 12px;">${post.caption}</pre>
+                        </div>
+                    `;
+                });
+                
+                container.innerHTML = html;
+                
+            } catch (e) {
+                document.getElementById('recent-posts-container').innerHTML = 
+                    '<p style="color: #dc3545; text-align: center;">Error loading posts</p>';
             }
         }
         
@@ -529,28 +594,17 @@ HTML_TEMPLATE = '''
                     resultBox.innerHTML = `
                         <h3>✅ Test Successful!</h3>
                         <p>Posted to: ${platforms.join(', ')}</p>
-                        <pre>${JSON.stringify(data.result, null, 2)}</pre>
+                        <p style="margin-top: 10px; color: #666;">Check your social media accounts!</p>
                     `;
                     
-                    // Add to recent posts
-                    const postList = document.getElementById('recent-posts');
-                    const newPost = document.createElement('div');
-                    newPost.className = 'result-box success';
-                    newPost.style.marginTop = '10px';
-                    newPost.innerHTML = `
-                        <div style="display: flex; justify-content: space-between;">
-                            <span><strong>${new Date().toLocaleTimeString()}</strong> - ${platforms.join(', ')}</span>
-                            <span style="color: #28a745;">✓ Success</span>
-                        </div>
-                        <pre style="margin-top: 10px;">${data.caption.substring(0, 100)}...</pre>
-                    `;
-                    postList.prepend(newPost);
+                    // Refresh recent posts
+                    await loadRecentPosts();
                     
                 } else {
                     resultBox.className = 'result-box error';
                     resultBox.innerHTML = `
                         <h3>❌ Test Failed</h3>
-                        <p>Error: ${data.error}</p>
+                        <p>${data.error || 'Unknown error'}</p>
                     `;
                 }
             } catch (e) {
@@ -570,6 +624,12 @@ HTML_TEMPLATE = '''
             if (document.getElementById('custom-ig').checked) platforms.push('instagram');
             if (document.getElementById('custom-twitter').checked) platforms.push('twitter');
             
+            if (platforms.length === 0) {
+                resultBox.innerHTML = '<h3>❌ Error</h3><p>Select at least one platform</p>';
+                resultBox.classList.add('error');
+                return;
+            }
+            
             try {
                 const response = await fetch('/api/test', {
                     method: 'POST',
@@ -587,8 +647,12 @@ HTML_TEMPLATE = '''
                     resultBox.className = 'result-box success';
                     resultBox.innerHTML = `
                         <h3>✅ Posted Successfully!</h3>
-                        <pre>${JSON.stringify(data.result, null, 2)}</pre>
+                        <p>Posted to: ${platforms.join(', ')}</p>
                     `;
+                    
+                    // Refresh recent posts
+                    await loadRecentPosts();
+                    
                 } else {
                     resultBox.className = 'result-box error';
                     resultBox.innerHTML = `<h3>❌ Failed</h3><p>${data.error}</p>`;
@@ -631,15 +695,14 @@ HTML_TEMPLATE = '''
         
         function connectPlatform(platform) {
             alert(`Redirecting to ${platform} OAuth... (This would connect your account)`);
-            // In production, this would redirect to Ayrshare/Late OAuth
         }
+        
+        // Load recent posts when page loads
+        document.addEventListener('DOMContentLoaded', loadRecentPosts);
     </script>
 </body>
 </html>
 '''
-
-# Store recent posts in memory (for demo)
-recent_posts = []
 
 @app.route('/')
 def dashboard():
@@ -647,8 +710,7 @@ def dashboard():
     return render_template_string(
         HTML_TEMPLATE,
         openai_key=os.getenv('OPENAI_API_KEY', ''),
-        sheet_id=os.getenv('GOOGLE_SHEET_ID', ''),
-        recent_posts=recent_posts[-5:]  # Last 5 posts
+        sheet_id=os.getenv('GOOGLE_SHEET_ID', '')
     )
 
 @app.route('/api/test', methods=['POST'])
@@ -663,6 +725,9 @@ def test_post():
         
         # Initialize manager
         manager = PostManager()
+        
+        result = None
+        caption = ""
         
         if custom_caption:
             # Use custom caption
@@ -685,15 +750,23 @@ def test_post():
         else:
             # Use AI-generated content
             result = manager.create_and_post_multi(platforms=platforms)
-            caption = "AI-generated content"
+            # Get the caption from somewhere - you might need to capture it
+            caption = "AI-generated content for " + ', '.join(platforms)
         
-        # Store in recent posts
+        # Load existing posts
+        recent_posts = load_recent_posts()
+        
+        # Add new post
         recent_posts.append({
             'time': datetime.now().strftime('%H:%M:%S'),
+            'date': datetime.now().strftime('%Y-%m-%d %H:%M'),
             'platforms': platforms,
-            'caption': caption[:100],
-            'result': result
+            'caption': caption[:150] + '...' if len(caption) > 150 else caption,
+            'success': True
         })
+        
+        # Save back
+        save_recent_posts(recent_posts)
         
         return jsonify({
             'success': True,
@@ -706,6 +779,11 @@ def test_post():
             'success': False,
             'error': str(e)
         }), 500
+
+@app.route('/api/recent-posts')
+def get_recent_posts():
+    """Get recent test posts"""
+    return jsonify(load_recent_posts())
 
 @app.route('/api/settings', methods=['POST'])
 def save_settings():
@@ -763,4 +841,4 @@ if __name__ != '__main__':
 if __name__ == '__main__':
     thread = threading.Thread(target=run_scheduler, daemon=True)
     thread.start()
-    app.run(host='0.0.7', port=5000, debug=True)
+    app.run(host='0.0.0.0', port=5000, debug=True)
